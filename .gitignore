@@ -3,3 +3,7 @@ __pycache__/
 *.h5
 *.pth
 .DS_Store
+data/
+*.pt
+*.pkl
+*.zip
