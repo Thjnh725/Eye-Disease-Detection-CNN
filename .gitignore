@@ -2,5 +2,4 @@ venv/
 __pycache__/
 *.h5
 *.pth
-data/
 .DS_Store
