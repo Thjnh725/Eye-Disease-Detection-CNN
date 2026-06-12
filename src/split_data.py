@@ -1,83 +1,105 @@
 import os
 import shutil
-import numpy as np
+import concurrent.futures
+from PIL import Image
 from sklearn.model_selection import train_test_split
-from pathlib import Path
-import json 
 
+def check_data_balance(data_dir):
+    """Đếm số lượng tệp trong từng lớp, tính toán phần trăm và cảnh báo mất cân bằng."""
+    print("\n PHÂN TÍCH DỮ LIỆU (EDA) & CÂN BẰNG LỚP")
+    print("-" * 50)
+    counts = {}
+    total = 0
+    categories = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
+    
+    for cat in categories:
+        cat_path = os.path.join(data_dir, cat)
+        num_files = len(os.listdir(cat_path))
+        counts[cat] = num_files
+        total += num_files
+        
+    for cat, count in counts.items():
+        percentage = (count / total) * 100 if total > 0 else 0
+        print(f"Lớp {cat:<10}: {count:>5} ảnh ({percentage:.2f}%)")
+        
+    avg = total / len(categories) if categories else 1
+    max_count = max(counts.values()) if counts else 0
+    if max_count > avg * 1.5:
+        print("\n⚠️ CẢNH BÁO: Dữ liệu đang bị MẤT CÂN BẰNG nghiêm trọng!")
+    else:
+        print("\n✅ Dữ liệu tương đối cân bằng.")
+    return categories
 
-# --- HÀM TÍNH TRỌNG SỐ ---
 def get_class_weights(data_dir):
-    categories = sorted(os.listdir(data_dir))
-    # Đếm số lượng ảnh trong mỗi class
+    """Tính toán trọng số cho từng lớp để đối xử công bằng giữa các lớp bệnh."""
+    categories = sorted([d for d in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, d))])
     counts = [len(os.listdir(os.path.join(data_dir, c))) for c in categories]
     total = sum(counts)
     num_classes = len(counts)
     
     # Công thức: weight = total / (num_classes * count)
-    weights = {i: total / (num_classes * count) for i, count in enumerate(counts)}
+    weights = {i: total / (num_classes * count) if count > 0 else 1.0 for i, count in enumerate(counts)}
+    print(f"\n⚖️ Trọng số tự động (Class Weights): {weights}")
     return weights, categories
 
-def stratified_split(source_dir, output_dir, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1):
-    """
-    Chia dữ liệu theo tỷ lệ và đảm bảo tỷ lệ các lớp (Stratified)
-    """
-    # Tạo cấu trúc thư mục đích
-    for split in ['train', 'val', 'test']:
-        os.makedirs(os.path.join(output_dir, split), exist_ok=True)
+def stratified_split(source_dir, output_dir):
+    """Phân chia dữ liệu Stratified (80/10/10) đảm bảo phân bổ đồng đều."""
+    print(f"\n✂️ TIẾN HÀNH CHIA DỮ LIỆU (STRATIFIED SPLIT 80/10/10) TỪ: {source_dir}")
     
-    # Lấy danh sách tất cả file và nhãn (tên thư mục con)
     all_files = []
     labels = []
+    categories = sorted(os.listdir(source_dir))
     
-    source_path = Path(source_dir)
-    for class_folder in os.listdir(source_path):
-        class_path = source_path / class_folder
-        if os.path.isdir(class_path):
-            for file_name in os.listdir(class_path):
-                all_files.append(class_path / file_name)
-                labels.append(class_folder)
-                # Tạo thư mục lớp trong các tập split
-                os.makedirs(os.path.join(output_dir, 'train', class_folder), exist_ok=True)
-                os.makedirs(os.path.join(output_dir, 'val', class_folder), exist_ok=True)
-                os.makedirs(os.path.join(output_dir, 'test', class_folder), exist_ok=True)
+    for class_idx, category in enumerate(categories):
+        cat_path = os.path.join(source_dir, category)
+        if not os.path.isdir(cat_path): continue
+            
+        os.makedirs(os.path.join(output_dir, "train", category), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "val", category), exist_ok=True)
+        os.makedirs(os.path.join(output_dir, "test", category), exist_ok=True)
+        
+        for file in os.listdir(cat_path):
+            all_files.append(os.path.join(cat_path, file))
+            labels.append(category)
 
-    # Bước 1: Split ra Train và (Val + Test)
-    # Tỷ lệ Val+Test = 1 - Train
-    val_test_ratio = val_ratio + test_ratio
+    # Bước 1: Tách 80% Train, 20% (Val + Test)
     train_files, val_test_files, train_labels, val_test_labels = train_test_split(
-        all_files, labels, test_size=val_test_ratio, stratify=labels, random_state=42
+        all_files, labels, test_size=0.20, stratify=labels, random_state=42
     )
-
-    # Bước 2: Split (Val + Test) thành Val và Test
-    # Tính lại tỷ lệ để chia tiếp
-    relative_test_ratio = test_ratio / val_test_ratio
-    val_files, test_files, _, _ = train_test_split(
-        val_test_files, val_test_labels, test_size=relative_test_ratio, stratify=val_test_labels, random_state=42
-    )
-
-    # Hàm copy file
-    def copy_files(files, split_name):
-        for file_path in files:
-            class_name = file_path.parent.name
-            dest_path = os.path.join(output_dir, split_name, class_name, file_path.name)
-            shutil.copy2(file_path, dest_path)
-
-    print("--- ĐANG PHÂN CHIA DỮ LIỆU... ---")
-    copy_files(train_files, 'train')
-    copy_files(val_files, 'val')
-    copy_files(test_files, 'test')
-    print(f"--- XONG! DỮ LIỆU ĐÃ ĐƯỢC CHIA TẠI: {output_dir} ---")
-
-
-    # --- TÍNH VÀ LƯU TRỌNG SỐ TẠI ĐÂY ---
-    print("--- ĐANG TÍNH TOÁN TRỌNG SỐ LỚP (CLASS WEIGHTS)... ---")
-    train_dir = os.path.join(output_dir, 'train')
-    weights, categories = get_class_weights(train_dir)
     
-    with open('class_weights.json', 'w') as f:
-        json.dump(weights, f)
-    print(f"--- ĐÃ LƯU TRỌNG SỐ VÀO 'class_weights.json' ---")
+    # Bước 2: Tách 20% đó thành 10% Val và 10% Test
+    val_files, test_files, _, _ = train_test_split(
+        val_test_files, val_test_labels, test_size=0.50, stratify=val_test_labels, random_state=42
+    )
+    
+    # Hàm xử lý làm sạch bằng Pillow và copy SIÊU TỐC (Dùng Đa luồng - Multi-threading)
+    def process_and_copy(files_list, split_name):
+        valid_exts = ('.jpg', '.jpeg', '.png', '.bmp', '.tif')
+        
+        def process_single_file(src_path):
+            if not src_path.lower().endswith(valid_exts):
+                return
+                
+            class_name = os.path.basename(os.path.dirname(src_path))
+            file_name = os.path.basename(src_path)
+            dest_path = os.path.join(output_dir, split_name, class_name, file_name)
+            
+            try:
+                # 1. Verify bằng Pillow (không tốn RAM)
+                with Image.open(src_path) as img:
+                    img.verify()
+                
+                # 2. Đọc lại và Ép về RGB, ghi đè
+                with Image.open(src_path) as img:
+                    rgb_img = img.convert('RGB')
+                    rgb_img.save(dest_path)
+            except Exception as e:
+                print(f"⚠️ Loại bỏ tệp hỏng/lỗi: {file_name} ({e})")
 
-if __name__ == "__main__":
-    stratified_split('data', 'data_final')
+        with concurrent.futures.ThreadPoolExecutor(max_workers=16) as executor:
+            list(executor.map(process_single_file, files_list))
+
+    process_and_copy(train_files, "train")
+    process_and_copy(val_files, "val")
+    process_and_copy(test_files, "test")
+    print(f"✅ Đã chia và làm sạch dữ liệu thành công vào: {output_dir}")
