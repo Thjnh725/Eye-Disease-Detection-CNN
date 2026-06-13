@@ -9,5 +9,5 @@ data/
 *.zip
 data_clean/
 data_final/
-dât_split/
+data_split/
 logs/
