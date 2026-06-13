@@ -7,3 +7,7 @@ data/
 *.pt
 *.pkl
 *.zip
+data_clean/
+data_final/
+dât_split/
+logs/
